@@ -506,7 +506,7 @@ const SCORE_OPTS = [
   {val:1,label:"부적합"},{val:3,label:"미흡"},{val:5,label:"보통"},{val:7,label:"우수"},{val:10,label:"매우우수"}
 ];
 
-const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQS70LpqKz41nNT4-1fla_I8BJmhXX6ZQoSG0khaGqPZN4Si2dMch0WDSlNUIJIiAw9toColGzDI59_/pub?output=csv';
+const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQS70LpqKz41nNT4-1fla_I8BJmhXX6ZQoSG0khaGqPZN4Si2dMch0WDSlNUIJIiAw9toColGzDI59_/pub?output=csv&t=' + Date.now();
 const WORKS_DATA = { child:[], youth:[] };
 let dataLoaded = false;
 
@@ -533,9 +533,9 @@ async function loadWorksFromSheet() {
       const num = row['번호'];
       const sortN = parseInt((num.split('-')[1])||'0');
       WORKS_DATA[cat].push({ id:`${cat}-${num}`,num,sortNum:sortN,category:cat,
-        title:row['작품 제목']||row['작품명']||'',
-        disability:row['작가 장애 유형']||row['장애유형']||'',
-        message:row['작품메세지']||row['작품메시지 (30자 내외/작품설명)']||row['작품메시지']||'',
+        title:row['작품명']||row['작품 제목']||'',
+        disability:row['장애유형']||row['작가 장애 유형']||'',
+        message:row['작품메세지']||row['작품메시지']||row['작품메시지 (30자 내외/작품설명)']||'',
         fileName:row['파일명']||'',driveUrl:row['드라이브링크']||''});
     });
     WORKS_DATA.child.sort((a,b)=>a.sortNum-b.sortNum);
