@@ -525,8 +525,17 @@ async function loadWorksFromSheet() {
   try {
     const res = await fetch(SHEET_CSV_URL);
     const text = await res.text();
-    const lines = text.trim().split('\n');
-    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g,''));
+    const allLines = text.trim().split('\n');
+
+    // 1행이 빈 행일 경우 건너뜀 → 헤더 행 자동 탐색
+    let headerLineIdx = 0;
+    for(let i=0;i<allLines.length;i++){
+      if(allLines[i].includes('번호') || allLines[i].includes('작품명')){
+        headerLineIdx = i; break;
+      }
+    }
+    const headers = allLines[headerLineIdx].split(',').map(h => h.trim().replace(/^"|"$/g,''));
+    const dataLines = allLines.slice(headerLineIdx + 1);
 
     // 컬럼 인덱스 자동 탐색
     const idx = {
@@ -539,12 +548,14 @@ async function loadWorksFromSheet() {
       message:    headers.findIndex(h => h.includes('작품메')),
     };
 
+    console.log('헤더행 인덱스:', headerLineIdx);
     console.log('헤더:', headers.slice(0,10).join(' | '));
     console.log('인덱스:', JSON.stringify(idx));
 
     WORKS_DATA.child=[]; WORKS_DATA.youth=[];
 
-    lines.slice(1).forEach(line => {
+    dataLines.forEach(line => {
+      if(!line.trim()) return;
       const cols = []; let cur='', inQ=false;
       for(let i=0;i<line.length;i++){
         const c=line[i];
