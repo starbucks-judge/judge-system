@@ -477,11 +477,13 @@
           <button class="admin-tab-btn" onclick="switchAdminTab('child')">아동청소년부</button>
           <button class="admin-tab-btn" onclick="switchAdminTab('youth')">청년부</button>
           <button class="admin-tab-btn" onclick="switchAdminTab('final')">📋 본선 심사 대상</button>
+          <button class="admin-tab-btn" onclick="switchAdminTab('exclude')">🚫 심사 제외 관리</button>
         </div>
         <div id="adminSummary" class="admin-panel active"></div>
         <div id="adminChild" class="admin-panel"></div>
         <div id="adminYouth" class="admin-panel"></div>
         <div id="adminFinal" class="admin-panel"></div>
+        <div id="adminExclude" class="admin-panel"></div>
       </div>
 
     </main>
@@ -823,6 +825,7 @@ function renderList(){
   document.getElementById('cnt-pending').textContent=works.length-doneCnt;
 
   let filtered=works.filter(w=>{
+    if(isExcluded(w.id)) return false;
     const match=!search||w.title.toLowerCase().includes(search)||String(w.num).includes(search)||(w.disability||'').toLowerCase().includes(search);
     const isDone=scores[w.id]?.saved;
     const matchS=currentStatusFilter==='all'||(currentStatusFilter==='done'&&isDone)||(currentStatusFilter==='pending'&&!isDone);
@@ -994,7 +997,7 @@ function openModal(src){document.getElementById('imgModalSrc').src=src;document.
 function closeModal(){document.getElementById('imgModal').classList.remove('show');document.getElementById('imgModalSrc').src='';}
 
 function getAvgScores(cat){
-  const works=WORKS_DATA[cat];
+  const works=WORKS_DATA[cat].filter(w=>!isExcluded(w.id));
   const judgeList=JUDGES.filter(j=>!j.isAdmin);
   return works.map(w=>{
     let sum=0,cnt=0;
@@ -1006,9 +1009,90 @@ function getAvgScores(cat){
 function renderAdmin(){renderAdminSummary();renderAdminCategory('child');renderAdminCategory('youth');renderAdminFinal();}
 
 function switchAdminTab(tab){
-  document.querySelectorAll('.admin-tab-btn').forEach((b,i)=>b.classList.toggle('active',['summary','child','youth','final'][i]===tab));
+  document.querySelectorAll('.admin-tab-btn').forEach((b,i)=>b.classList.toggle('active',['summary','child','youth','final','exclude'][i]===tab));
   document.querySelectorAll('.admin-panel').forEach(p=>p.classList.remove('active'));
-  document.getElementById({summary:'adminSummary',child:'adminChild',youth:'adminYouth',final:'adminFinal'}[tab]).classList.add('active');
+  document.getElementById({summary:'adminSummary',child:'adminChild',youth:'adminYouth',final:'adminFinal',exclude:'adminExclude'}[tab]).classList.add('active');
+  if(tab==='exclude') renderExcludePanel();
+}
+
+// ── 심사 제외 관리 ──
+function getExcluded() {
+  try { return JSON.parse(localStorage.getItem('admin_excluded')||'[]'); } catch(e) { return []; }
+}
+function saveExcluded(list) { localStorage.setItem('admin_excluded', JSON.stringify(list)); }
+function isExcluded(workId) { return getExcluded().includes(workId); }
+
+function toggleExclude(workId) {
+  let list = getExcluded();
+  if(list.includes(workId)) {
+    list = list.filter(id => id !== workId);
+    showToast('심사 제외 해제되었습니다.', '');
+  } else {
+    list.push(workId);
+    showToast('심사 제외 처리되었습니다.', 'error');
+  }
+  saveExcluded(list);
+  renderExcludePanel();
+  document.getElementById('count-child').textContent = WORKS_DATA.child.filter(w=>!isExcluded(w.id)).length;
+  document.getElementById('count-youth').textContent = WORKS_DATA.youth.filter(w=>!isExcluded(w.id)).length;
+}
+
+function renderExcludePanel() {
+  const excluded = getExcluded();
+  const panel = document.getElementById('adminExclude');
+  const makeTable = (works, catName, cat) => {
+    const excCnt = works.filter(w => excluded.includes(w.id)).length;
+    return `
+      <div style="background:#fff;border-radius:var(--radius);border:1px solid var(--gray-200);box-shadow:var(--shadow-sm);margin-bottom:20px;overflow:hidden;">
+        <div style="padding:14px 20px;background:var(--gray-100);border-bottom:1px solid var(--gray-200);display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:14px;font-weight:700;color:var(--primary);">${catName}</span>
+          <span style="font-size:12px;color:var(--gray-600);">전체 ${works.length}건 중 <b style="color:var(--accent);">제외 ${excCnt}건</b> / <b style="color:var(--success);">심사대상 ${works.length-excCnt}건</b></span>
+        </div>
+        <div style="padding:12px 16px;border-bottom:1px solid var(--gray-200);">
+          <input type="text" id="excludeSearch_${cat}" placeholder="🔍 작품명 또는 번호 검색..."
+            oninput="filterExcludeTable('${cat}')"
+            style="width:100%;max-width:300px;padding:7px 12px;border:1.5px solid var(--gray-300);border-radius:var(--radius-sm);font-size:13px;outline:none;" />
+        </div>
+        <div style="overflow:auto;">
+          <table style="width:100%;border-collapse:collapse;min-width:500px;" id="excludeTable_${cat}">
+            <thead><tr style="background:var(--gray-100);">
+              <th style="padding:10px 14px;font-size:12px;font-weight:600;color:var(--gray-600);border-bottom:1px solid var(--gray-200);width:80px;text-align:center;">번호</th>
+              <th style="padding:10px 14px;font-size:12px;font-weight:600;color:var(--gray-600);border-bottom:1px solid var(--gray-200);text-align:left;">작품명</th>
+              <th style="padding:10px 14px;font-size:12px;font-weight:600;color:var(--gray-600);border-bottom:1px solid var(--gray-200);width:110px;text-align:center;">장애유형</th>
+              <th style="padding:10px 14px;font-size:12px;font-weight:600;color:var(--gray-600);border-bottom:1px solid var(--gray-200);width:90px;text-align:center;">상태</th>
+              <th style="padding:10px 14px;font-size:12px;font-weight:600;color:var(--gray-600);border-bottom:1px solid var(--gray-200);width:110px;text-align:center;">처리</th>
+            </tr></thead>
+            <tbody>
+            ${works.map(w => {
+              const isExc = excluded.includes(w.id);
+              return '<tr data-num="'+w.num+'" data-title="'+w.title+'" style="'+(isExc?'background:#fff5f5;':'')+'">'+
+                '<td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);text-align:center;"><span class="badge badge-gray">'+w.num+'</span></td>'+
+                '<td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);font-weight:600;'+(isExc?'color:var(--gray-400);text-decoration:line-through;':'')+'">'+w.title+'</td>'+
+                '<td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);text-align:center;font-size:12px;color:var(--gray-600);">'+(w.disability||'-')+'</td>'+
+                '<td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);text-align:center;">'+(isExc?'<span class="badge badge-red">심사제외</span>':'<span class="badge badge-green">심사대상</span>')+'</td>'+
+                '<td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);text-align:center;">'+
+                '<button class="btn btn-sm '+(isExc?'btn-secondary':'btn-danger')+'" onclick="toggleExclude(''+w.id+'')">'+(isExc?'✅ 제외 해제':'🚫 제외')+'</button></td>'+
+                '</tr>';
+            }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  };
+  panel.innerHTML =
+    '<div style="background:var(--warning-light);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;font-size:13px;color:#7a5000;">'+
+    '💡 심사 제외된 작품은 심사위원 목록에서 숨겨지며 심사 현황 취합에도 포함되지 않습니다. 언제든지 해제 가능합니다.</div>'+
+    makeTable(WORKS_DATA.child,'🧒 아동청소년부','child')+
+    makeTable(WORKS_DATA.youth,'🎓 청년부','youth');
+}
+
+function filterExcludeTable(cat) {
+  const search = document.getElementById('excludeSearch_'+cat).value.toLowerCase();
+  document.querySelectorAll('#excludeTable_'+cat+' tbody tr').forEach(row => {
+    const num = (row.dataset.num||'').toLowerCase();
+    const title = (row.dataset.title||'').toLowerCase();
+    row.style.display = (!search || num.includes(search) || title.includes(search)) ? '' : 'none';
+  });
 }
 
 function renderAdminCategory(cat){
