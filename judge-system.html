@@ -666,7 +666,8 @@ let currentUser=null, currentCategory='child', currentStatusFilter='all', curren
 const PAGE_SIZE=20;
 
 function getStorageKey(e,c){return`judge_scores_${e}_${c}`;}
-function loadScores(e,c){try{const d=localStorage.getItem(getStorageKey(e,c));return d?JSON.parse(d):{}}catch(e){return{};}}
+function loadScoresLocal(e,c){try{const d=localStorage.getItem(getStorageKey(e,c));return d?JSON.parse(d):{}}catch(e){return{};}}
+function loadScores(e,c){return loadScoresLocal(e,c);}
 function saveScoresLS(e,c,d){localStorage.setItem(getStorageKey(e,c),JSON.stringify(d));}
 function getScore(id){return loadScores(currentUser.email,currentCategory)[id]||null;}
 function setScore(id,obj){const s=loadScores(currentUser.email,currentCategory);s[id]=obj;saveScoresLS(currentUser.email,currentCategory,s);}
@@ -684,12 +685,16 @@ function doLogin() {
   if(judge.isAdmin) document.getElementById('adminMenuSection').style.display='block';
   if(!dataLoaded){
     showToast('작품 데이터 로딩 중...','');
-    loadWorksFromSheet().then(()=>{
+    loadWorksFromSheet().then(async ()=>{
+      await loadExcludedFromCloud();
       updateSidebarCounts();
       showGuide();
       showToast(`${judge.name}님 환영합니다!`,'success');
     });
-  } else { switchCategory('child'); showToast(`${judge.name}님 환영합니다!`,'success'); }
+  } else {
+    loadExcludedFromCloud().then(()=>{ updateSidebarCounts(); showGuide(); });
+    showToast(`${judge.name}님 환영합니다!`,'success');
+  }
 }
 document.getElementById('loginPassword').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 
@@ -729,7 +734,9 @@ function switchCategory(cat){
   document.getElementById('tab-done').classList.remove('active');
   document.getElementById('tab-pending').classList.remove('active');
   document.getElementById('listTitle').textContent=cat==='child'?'아동청소년부 작품 목록':'청년부 작품 목록';
-  showScreen('listScreen'); renderList();
+  showScreen('listScreen');
+  // 클라우드에서 최신 점수 동기화 후 목록 렌더
+  loadScoresFromCloud(currentUser.email, cat).then(()=>renderList()).catch(()=>renderList());
 }
 
 function filterStatus(status){
@@ -978,9 +985,14 @@ function renderList(){
 }
 function goPage(n){currentPage=n;renderList();}
 
-function openJudgeForm(workId){
+async function openJudgeForm(workId){
   currentWorkId=workId;
   const work=findWork(workId); if(!work) return;
+  // 클라우드에서 최신 점수 동기화
+  try {
+    const cloudScores = await loadScoresFromCloud(currentUser.email, work.category||currentCategory);
+    // 이미 로컬에 반영됨
+  } catch(e) {}
   const saved=getScore(workId);
   const criteria=CRITERIA[work.category];
   const maxTotal=criteria.length*10;
@@ -1051,13 +1063,18 @@ function updateTotal(){
   hint.style.color=total===maxTotal?'var(--success)':'var(--gray-600)';
 }
 
-function saveScore(){
+async function saveScore(){
   const work=findWork(currentWorkId);
   const scores=getCurrentCriteriaScores();
   const total=Object.values(scores).reduce((a,b)=>a+b,0);
   const comment=document.getElementById('judgeComment').value;
   const obj={criteria:scores,total,comment,saved:true,savedAt:Date.now()};
+  // 로컬 저장
   setScore(currentWorkId,obj);
+  // 클라우드 저장
+  try {
+    await saveScoreToCloud(currentWorkId, obj);
+  } catch(e) { console.error('클라우드 저장 실패:', e); }
   const nt=`마지막 저장: ${new Date().toLocaleString('ko-KR')}`;
   document.getElementById('saveNotice').textContent=nt;
   document.getElementById('saveNoticeTop').textContent=nt;
@@ -1125,26 +1142,120 @@ function switchAdminTab(tab){
   if(tab==='exclude') renderExcludePanel();
 }
 
-// ── 심사 제외 관리 ──
-function getExcluded() {
+// ══════════════════════════════════════════
+//  Supabase 설정
+// ══════════════════════════════════════════
+const SUPABASE_URL = 'https://fhiwobyxcbhqpxsdtlxj.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZoaXdvYnl4Y2JocXB4c2R0bHhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0NDk3MzEsImV4cCI6MjA5MzAyNTczMX0.FyxnXOLYbj71rZq5eVIe52q7lC12m0RP4YKwpS4z8t8';
+
+async function sbFetch(path, method='GET', body=null) {
+  const opts = {
+    method,
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': method==='POST' ? 'resolution=merge-duplicates,return=minimal' : 'return=minimal'
+    }
+  };
+  if(body) opts.body = JSON.stringify(body);
+  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, opts);
+  if(method==='GET') return res.json();
+  return res.ok;
+}
+
+// ── 심사 점수 저장/불러오기 (Supabase) ──
+async function saveScoreToCloud(workId, scoreObj) {
+  const work = findWork(workId);
+  await sbFetch('judge_scores', 'POST', {
+    judge_email: currentUser.email,
+    work_id: workId,
+    category: work?.category || currentCategory,
+    criteria: scoreObj.criteria,
+    total: scoreObj.total,
+    comment: scoreObj.comment || '',
+    saved_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  // 로컬에도 캐시
+  const scores = loadScoresLocal(currentUser.email, currentCategory);
+  scores[workId] = { ...scoreObj, saved: true };
+  localStorage.setItem(getStorageKey(currentUser.email, currentCategory), JSON.stringify(scores));
+}
+
+async function loadScoresFromCloud(email, category) {
+  try {
+    const rows = await sbFetch(`judge_scores?judge_email=eq.${encodeURIComponent(email)}&category=eq.${category}&select=work_id,criteria,total,comment,saved_at`);
+    const result = {};
+    (rows||[]).forEach(r => {
+      result[r.work_id] = {
+        criteria: r.criteria,
+        total: r.total,
+        comment: r.comment,
+        saved: true,
+        savedAt: new Date(r.saved_at).getTime()
+      };
+    });
+    // 로컬 캐시 업데이트
+    localStorage.setItem(getStorageKey(email, category), JSON.stringify(result));
+    return result;
+  } catch(e) {
+    console.error('클라우드 로드 실패, 로컬 캐시 사용:', e);
+    return loadScoresLocal(email, category);
+  }
+}
+
+// ── 심사 제외 관리 (Supabase) ──
+let excludedCache = null;
+
+async function loadExcludedFromCloud() {
+  try {
+    const rows = await sbFetch('excluded_works?select=work_id');
+    excludedCache = (rows||[]).map(r => r.work_id);
+    localStorage.setItem('admin_excluded', JSON.stringify(excludedCache));
+    return excludedCache;
+  } catch(e) {
+    excludedCache = getExcludedLocal();
+    return excludedCache;
+  }
+}
+
+function getExcludedLocal() {
   try { return JSON.parse(localStorage.getItem('admin_excluded')||'[]'); } catch(e) { return []; }
 }
-function saveExcluded(list) { localStorage.setItem('admin_excluded', JSON.stringify(list)); }
-function isExcluded(workId) { return getExcluded().includes(workId); }
 
-function toggleExclude(workId) {
-  let list = getExcluded();
+function getExcluded() {
+  return excludedCache || getExcludedLocal();
+}
+
+async function saveExcluded(list) {
+  excludedCache = list;
+  localStorage.setItem('admin_excluded', JSON.stringify(list));
+}
+
+async function toggleExcludeCloud(workId) {
+  const list = getExcluded();
   if(list.includes(workId)) {
-    list = list.filter(id => id !== workId);
+    // 제외 해제
+    await sbFetch(`excluded_works?work_id=eq.${workId}`, 'DELETE');
+    excludedCache = list.filter(id => id !== workId);
     showToast('심사 제외 해제되었습니다.', '');
   } else {
-    list.push(workId);
+    // 제외 추가
+    await sbFetch('excluded_works', 'POST', { work_id: workId });
+    excludedCache = [...list, workId];
     showToast('심사 제외 처리되었습니다.', 'error');
   }
-  saveExcluded(list);
+  localStorage.setItem('admin_excluded', JSON.stringify(excludedCache));
   renderExcludePanel();
   updateSidebarCounts();
   renderList();
+}
+
+function isExcluded(workId) { return getExcluded().includes(workId); }
+
+function toggleExclude(workId) {
+  toggleExcludeCloud(workId);
 }
 
 function renderExcludePanel() {
