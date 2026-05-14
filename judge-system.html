@@ -483,6 +483,7 @@
         <div class="page-header">
           <h2>📊 심사 현황 취합 (관리자)</h2>
           <div style="display:flex;gap:8px;" class="no-print">
+            <button class="btn btn-secondary btn-sm" onclick="refreshAdmin()">🔄 데이터 새로고침</button>
             <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨 인쇄/PDF</button>
             <button class="btn btn-primary btn-sm" onclick="exportAllCSV()">📥 전체 데이터 내보내기</button>
             <button class="btn btn-danger btn-sm" onclick="showResetModal()">🗑 심사 데이터 초기화</button>
@@ -909,9 +910,21 @@ let allScoresCache = {}; // { 'judge_email_category': { work_id: scoreObj } }
 
 async function loadAllScoresFromCloud() {
   try {
-    const rows = await sbFetch('judge_scores?select=judge_email,work_id,category,criteria,total,comment,saved_at');
     allScoresCache = {};
-    (rows||[]).forEach(r => {
+    // Supabase 기본 1000건 제한 → 페이지네이션으로 전체 로드
+    const PAGE = 1000;
+    let offset = 0;
+    let total = [];
+    while(true) {
+      const rows = await sbFetch(
+        `judge_scores?select=judge_email,work_id,category,criteria,total,comment,saved_at&limit=${PAGE}&offset=${offset}`
+      );
+      if(!rows || rows.length === 0) break;
+      total = total.concat(rows);
+      if(rows.length < PAGE) break; // 마지막 페이지
+      offset += PAGE;
+    }
+    total.forEach(r => {
       const key = r.judge_email + '_' + r.category;
       if(!allScoresCache[key]) allScoresCache[key] = {};
       allScoresCache[key][r.work_id] = {
@@ -922,7 +935,7 @@ async function loadAllScoresFromCloud() {
         savedAt: new Date(r.saved_at).getTime()
       };
     });
-    console.log('관리자 전체 데이터 로드 완료:', Object.keys(allScoresCache));
+    console.log(`관리자 전체 데이터 로드 완료: 총 ${total.length}건`, Object.keys(allScoresCache));
     return allScoresCache;
   } catch(e) {
     console.error('관리자 데이터 로드 실패:', e);
@@ -933,6 +946,14 @@ async function loadAllScoresFromCloud() {
 function getAdminScores(email, category) {
   const key = email + '_' + category;
   return allScoresCache[key] || loadScoresLocal(email, category);
+}
+
+async function refreshAdmin(){
+  showToast('데이터 새로고침 중...','');
+  await loadAllScoresFromCloud();
+  await loadExcludedFromCloud();
+  renderAdmin();
+  showToast('새로고침 완료!','success');
 }
 
 async function showAdmin(){
@@ -1268,6 +1289,7 @@ async function sbFetch(path, method='GET', body=null) {
   };
   // Upsert (POST): merge-duplicates만 단독으로 지정
   if(method === 'POST') headers['Prefer'] = 'resolution=merge-duplicates';
+  if(method === 'GET') headers['Range-Unit'] = 'items';
   const opts = { method, headers };
   if(body) opts.body = JSON.stringify(body);
   const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, opts);
@@ -1329,9 +1351,21 @@ async function saveScoreToCloud(workId, scoreObj) {
 
 async function loadScoresFromCloud(email, category) {
   try {
-    const rows = await sbFetch(`judge_scores?judge_email=eq.${encodeURIComponent(email)}&category=eq.${category}&select=work_id,criteria,total,comment,saved_at`);
+    // 페이지네이션으로 전체 로드 (건수 제한 없음)
+    const PAGE = 1000;
+    let offset = 0;
+    let total = [];
+    while(true) {
+      const rows = await sbFetch(
+        `judge_scores?judge_email=eq.${encodeURIComponent(email)}&category=eq.${category}&select=work_id,criteria,total,comment,saved_at&limit=${PAGE}&offset=${offset}`
+      );
+      if(!rows || rows.length === 0) break;
+      total = total.concat(rows);
+      if(rows.length < PAGE) break;
+      offset += PAGE;
+    }
     const result = {};
-    (rows||[]).forEach(r => {
+    total.forEach(r => {
       result[r.work_id] = {
         criteria: r.criteria,
         total: r.total,
@@ -1340,7 +1374,7 @@ async function loadScoresFromCloud(email, category) {
         savedAt: new Date(r.saved_at).getTime()
       };
     });
-    // 로컬 캐시 + allScoresCache 동시 업데이트
+    // 로컬 + allScoresCache 동시 업데이트
     localStorage.setItem(getStorageKey(email, category), JSON.stringify(result));
     if(!allScoresCache) allScoresCache={};
     allScoresCache[email+'_'+category] = result;
@@ -1350,6 +1384,7 @@ async function loadScoresFromCloud(email, category) {
     return loadScoresLocal(email, category);
   }
 }
+
 
 // ── 심사 제외 관리 (Supabase) ──
 let excludedCache = null;
