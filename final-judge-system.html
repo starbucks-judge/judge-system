@@ -952,7 +952,8 @@ async function loadAllScoresFromCloud() {
       if(rows.length < limit) break;
       offset += limit;
     }
-    console.log('관리자 전체 데이터 로드 완료:', Object.keys(allScoresCache), '총', offset + Object.keys(allScoresCache).length, '건');
+    const totalCount = Object.values(allScoresCache).reduce((a,b)=>a+Object.keys(b).length,0);
+    console.log('관리자 전체 데이터 로드 완료:', Object.keys(allScoresCache), `총 ${totalCount}건`);
     return allScoresCache;
   } catch(e) {
     console.error('관리자 데이터 로드 실패:', e);
